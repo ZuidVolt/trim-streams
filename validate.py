@@ -34,12 +34,9 @@ def validate_dependencies() -> bool:
     Checks if the dependencies are installed correctly.
     """
     required_dependencies = {
-        "annotated-types",
         "psutil",
         "pydantic",
         "pydantic-core",
-        "types-psutil",
-        "typing-extensions",
     }
 
     # Check Python dependencies
