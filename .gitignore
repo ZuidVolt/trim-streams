@@ -1,0 +1,12 @@
+archive/
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+.vscode/
+.venv/
+logs/
+.ropeproject/
+
+*.log
+.env
+.DS_Store

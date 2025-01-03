@@ -1,0 +1,100 @@
+[project]
+name = "trim-streams"
+authors = [{ name = "zuidvolt" }]
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil==6.1.1",
+    "types-psutil==6.1.0.20241221",
+    "pydantic==2.10.4",
+    "setuptools==75.6",
+    "types-setuptools==75.6.0.20241223",
+]
+
+[project.optional-dependencies]
+dev = [
+    "coverage==7.6.9",
+    "mypy==1.13.0",
+    "radon==6.0.1",
+    "ruff==0.8.4",
+    "vulture==2.14",
+]
+
+[tool.ruff]
+line-length = 120
+fix = true
+unsafe-fixes = true
+preview = true
+
+[tool.ruff.lint]
+preview = true
+select = [
+    "F",
+    "W",
+    "N",
+    "C90",
+    "B",
+    "UP",
+    "RET",
+    "SIM",
+    "RUF",
+    "NPY",
+    "PD",
+    "ARG",
+    "TID",
+    "PTH",
+    "Q",
+    "ISC",
+    "PIE",
+    "YTT",
+    "ASYNC",
+    "C4",
+    "T10",
+    "A",
+    "COM",
+    "RSE",
+    "PL",
+    "E",
+    "PGH",
+]
+ignore = [
+    "PLR0913",
+    "PLR0911",
+    "PLR0914",
+    "PLR6301",
+    "PD901",
+    "E501",
+    "G004",
+    "RUF100",
+    "PGH003",
+    "PLR0911",
+    "PLR0912",
+    "COM812",
+    "ISC001",
+    "C901",
+]
+
+[tool.mypy]
+strict = true
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
+reportUnusedCallResult = false
+reportAny = false
+reportExplicitAny = false
+
+[tool.coverage.run]
+source = ["."]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.radon]
+cc = ["-a", "-nc", "-s"]
+mi = ["-s"]
