@@ -181,14 +181,14 @@ def main() -> None:
         nargs="+",
         type=str,
         default=["eng", "kor", "jpn"],
-        help="List of audio language codes to keep (default: eng kor)",
+        help="List of audio language codes to keep (default: eng, kor, jpn)",
     )
     parser.add_argument(
         "--subtitle-langs",
         nargs="+",
         type=str,
         default=["eng"],
-        help="List of subtitle language codes to keep (default: eng kor)",
+        help="List of subtitle language codes to keep (default: eng)",
     )
     parser.add_argument("--no-copy", action="store_true", help="Don't use stream copy mode (will re-encode streams)")
     parser.add_argument("--no-verify", action="store_true", help="Skip output file verification")
