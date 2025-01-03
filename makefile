@@ -1,7 +1,5 @@
 PYTHON_FILES := trim_streams.py validate.py
 
-
-
 .PHONY: format ruff-check mypy-strict basedpyright-check check coverage security radon radon-mi vulture
 
 # main check (Enforced before commit)
