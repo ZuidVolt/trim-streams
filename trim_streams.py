@@ -70,14 +70,23 @@ class VideoProcessor:
         self.probe_data: ProbeData | None = None
         self.logger: logging.Logger = logging.getLogger(__name__)
 
-    def probe_file(self) -> ProbeData:
-        """Probe the input file using ffprobe to get stream information."""
+    def probe_file(self, file_path: Path | None = None) -> ProbeData:
+        # Use cached probe_data if available and probing the input file
+        if file_path is None and self.probe_data is not None:
+            return self.probe_data
+
+        target_path = file_path or self.input_file
         self.status = ProcessingStatus.ANALYZING
-        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(self.input_file)]
+        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(target_path)]
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             probe_data: ProbeData = json.loads(result.stdout)
+
+            # Cache the result if it's for the input file
+            if file_path is None:
+                self.probe_data = probe_data
+
             return probe_data
 
         except subprocess.CalledProcessError as e:
@@ -113,9 +122,9 @@ class VideoProcessor:
                 self.logger.debug(f"Mapped subtitle stream: {index} ({language})")
 
         if not video_mapped:
-            raise FFProbeError("No video stream found in input file")
+            raise FFProbeError(f"No video stream in '{self.input_file.name}'")
         if not mappings:
-            raise FFProbeError("No streams selected for mapping")
+            raise FFProbeError(f"No matching streams found in '{self.input_file.name}' for specified languages")
 
         return mappings
 
@@ -124,9 +133,9 @@ class VideoProcessor:
         self.status = ProcessingStatus.VERIFYING
 
         if not output_file.exists():
-            raise FFMPEGError("Output file was not created")
+            raise FFMPEGError(f"Failed to create: {output_file.name}")
         if output_file.stat().st_size == 0:
-            raise FFMPEGError("Output file is empty")
+            raise FFMPEGError(f"Empty output file: {output_file.name}")
 
         try:
             self.probe_file()  # Verify the output file can be probed
