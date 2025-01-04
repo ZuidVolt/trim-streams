@@ -215,7 +215,7 @@ def main() -> None:
     )
 
     # Create output directory
-    output_dir = input_path.parent / "processed"
+    output_dir = input_path / "processed"
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except PermissionError as e:
@@ -223,17 +223,14 @@ def main() -> None:
         logger.exception("Failed to create output directory", exc_info=e)
         return
 
-    # Get list of files to process
     if input_path.is_file():
         files_to_process = [input_path]
     else:
         files_to_process = [
-            f for f in input_path.iterdir() if f.is_file() and f.suffix.lower() in {".mkv", ".mp4", ".avi", ".mov"}
+            f
+            for f in input_path.rglob("*")
+            if f.is_file() and f.parent.name != "processed" and f.suffix.lower() in {".mkv", ".mp4", ".avi", ".mov"}
         ]
-
-        if not files_to_process:
-            logger.error(f"No supported video files found in {input_path}")
-            return
 
     # Process each file
     success_count = 0
