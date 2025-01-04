@@ -180,8 +180,8 @@ def main() -> None:
         "--audio-langs",
         nargs="+",
         type=str,
-        default=["eng", "kor", "jpn"],
-        help="List of audio language codes to keep (default: eng, kor, jpn)",
+        default=["eng", "kor", "jpn", "chi"],
+        help="List of audio language codes to keep (default: eng, kor, jpn, chi)",
     )
     parser.add_argument(
         "--subtitle-langs",
