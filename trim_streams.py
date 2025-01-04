@@ -180,7 +180,7 @@ def main() -> None:
         "--audio-langs",
         nargs="+",
         type=str,
-        default=["eng", "kor", "jpn", "chi"],
+        default=["eng", "kor", "jpn", "chi", "zho", "cmn"],
         help="List of audio language codes to keep (default: eng, kor, jpn, chi)",
     )
     parser.add_argument(
