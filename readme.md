@@ -19,7 +19,7 @@ A powerful Python utility for managing and removing Unwanted video language trac
 - FFmpeg in system PATH
 - Required Python packages:
 
-  ```toml
+  ```yaml
   psutil==6.1.1
   pydantic==2.10.4
   setuptools==75.6
