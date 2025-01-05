@@ -51,7 +51,14 @@ class ProbeData(TypedDict):
 
 
 class ProcessingConfig(BaseModel):
-    """Configuration for video processing"""
+    """Configuration model for video stream processing.
+
+    Attributes:
+        audio_langs (list[str]): List of audio language codes to keep (e.g., ['eng', 'kor', 'jpn'])
+        subtitle_langs (list[str]): List of subtitle language codes to keep (e.g., ['eng'])
+        copy_streams (bool): Whether to use stream copy mode (True) or re-encode (False)
+        verify_output (bool): Whether to verify the output file after processing
+    """
 
     audio_langs: list[str] = Field(default=["eng", "kor", "jpn"])
     subtitle_langs: list[str] = Field(default=["eng"])
@@ -63,6 +70,28 @@ class ProcessingConfig(BaseModel):
 
 
 class VideoProcessor:
+    """Handles video file processing to remove unwanted language tracks.
+
+    This class manages the analysis and processing of video files, allowing selective
+    retention of audio and subtitle tracks based on language preferences.
+
+    Args:
+        input_file (Path): Path to the input video file
+        config (ProcessingConfig): Processing configuration settings
+
+    Attributes:
+        input_file (Path): Path to the input video file
+        config (ProcessingConfig): Processing configuration settings
+        status (ProcessingStatus): Current processing status
+        probe_data (ProbeData | None): Cached FFprobe data
+        logger (logging.Logger): Logger instance
+
+    Raises:
+        FFProbeError: When FFprobe analysis fails
+        FFMPEGError: When FFmpeg processing fails
+        ProcessorError: For general processing errors
+    """
+
     def __init__(self, input_file: Path, config: ProcessingConfig) -> None:
         self.input_file: Path = input_file
         self.config: ProcessingConfig = config
