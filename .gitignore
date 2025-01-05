@@ -6,7 +6,11 @@ __pycache__/
 .venv/
 logs/
 .ropeproject/
+trim_streams.build/
+trim_streams.dist/
+trim_streams.onefile-build/
 
 *.log
 .env
 .DS_Store
+trim-streams
