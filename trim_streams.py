@@ -189,14 +189,14 @@ def main() -> None:
         "--audio-langs",
         nargs="+",
         type=str,
-        default=["eng", "kor", "jpn", "chi", "zho", "cmn"],
+        default=["eng", "en", "kor", "jpn", "chi", "zho", "cmn"],
         help="List of audio language codes to keep (default: eng, kor, jpn, chi)",
     )
     parser.add_argument(
         "--subtitle-langs",
         nargs="+",
         type=str,
-        default=["eng"],
+        default=["eng", "en"],
         help="List of subtitle language codes to keep (default: eng)",
     )
     parser.add_argument("--no-copy", action="store_true", help="Don't use stream copy mode (will re-encode streams)")
