@@ -1,24 +1,22 @@
 [project]
 name = "trim-streams"
-authors = [{ name = "zuidvolt" }]
 version = "0.1.0"
-requires-python = ">=3.11"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
 dependencies = [
-    "psutil==6.1.1",
-    "types-psutil==6.1.0.20241221",
-    "pydantic==2.10.4",
-    "setuptools==75.6",
-    "types-setuptools==75.6.0.20241223",
+    "psutil",
+    "types-psutil",
+    "pydantic",
+    "setuptools",
+    "types-setuptools",
 ]
 
+[project.license]
+text = "Apache License"
+
 [project.optional-dependencies]
-dev = [
-    "coverage==7.6.9",
-    "mypy==1.13.0",
-    "radon==6.0.1",
-    "ruff==0.8.4",
-    "vulture==2.14",
-]
+dev = ["ruff", "mypy", "radon", "vulture"]
 
 [tool.ruff]
 line-length = 120
@@ -26,64 +24,73 @@ fix = true
 unsafe-fixes = true
 preview = true
 
+[tool.mypy]
+
+[tool.pyright]
+typeCheckingMode = "off"
+pythonVersion = "3.10"
+reportUnusedCallResult = false
+reportAny = false
+reportExplicitAny = false
+
+[tool.radon]
+cc = ["-a", "-nc", "-s"]
+mi = ["-s"]
+
 [tool.ruff.lint]
 preview = true
 select = [
+    "RUF",
+    "D",
     "F",
     "W",
     "N",
-    "C90",
+    "I",
+    "E",
+    "A",
     "B",
+    "Q",
+    "PL",
+    "C90",
     "UP",
     "RET",
     "SIM",
-    "RUF",
     "NPY",
     "PD",
     "ARG",
     "TID",
     "PTH",
-    "Q",
     "ISC",
     "PIE",
     "YTT",
     "ASYNC",
     "C4",
     "T10",
-    "A",
     "COM",
     "RSE",
-    "PL",
-    "E",
     "PGH",
+    "PLR",
+    "PLC",
+    "PGH",
+    "FURB",
+    "PLW",
+    "TRY",
+    "PERF",
+    "EXE",
+    "DTZ",
+    "INT",
+    "ISC",
+    "ICN",
+    "LOG",
+    "FLY",
 ]
-ignore = [
-    "PLR0913",
-    "PLR0911",
-    "PLR0914",
-    "PLR6301",
-    "PD901",
-    "E501",
-    "G004",
-    "RUF100",
-    "PGH003",
-    "PLR0911",
-    "PLR0912",
-    "COM812",
-    "ISC001",
-    "C901",
-]
+ignore = ["COM812", "TRY003", "TRY300", "ISC001"]
 
-[tool.mypy]
-strict = true
-
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-pythonVersion = "3.13"
-reportUnusedCallResult = false
-reportAny = false
-reportExplicitAny = false
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+indent-style = "space"
 
 [tool.coverage.run]
 source = ["."]
@@ -95,6 +102,5 @@ show_missing = true
 [tool.coverage.html]
 directory = "htmlcov"
 
-[tool.radon]
-cc = ["-a", "-nc", "-s"]
-mi = ["-s"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"

@@ -1,8 +1,11 @@
+"""Module for validating dependencies and system resources."""
+
 # validate.py
-import psutil
-import pkg_resources
-import subprocess
 import logging
+import subprocess
+
+import pkg_resources
+import psutil
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,22 +20,23 @@ MIN_REQUIRED_MEMORY = 4 * 1024 * 1024 * 1024  # 4 GB
 
 
 def log_warning(message: str) -> None:
+    """Log a warning message."""
     logger.warning(message)
 
 
 def log_error(message: str) -> None:
+    """Log an error message."""
     logger.error(message)
 
 
 def log_error_and_return_false(message: str) -> bool:
+    """Log an error message and return False."""
     logger.error(message)
     return False
 
 
 def validate_dependencies() -> bool:
-    """
-    Checks if the dependencies are installed correctly.
-    """
+    """Checks if the dependencies are installed correctly."""
     required_dependencies = {
         "psutil",
         "pydantic",
@@ -41,9 +45,8 @@ def validate_dependencies() -> bool:
 
     # Check Python dependencies
     for dependency in required_dependencies:
-        try:
-            pkg_resources.get_distribution(dependency)
-        except pkg_resources.DistributionNotFound:
+        dist = pkg_resources.find_distributions(dependency)
+        if dist is None:
             log_error_and_return_false(
                 (
                     f"Missing required Python dependency: {dependency}. "

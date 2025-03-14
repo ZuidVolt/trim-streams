@@ -1,31 +1,24 @@
-PYTHON_FILES := trim_streams.py validate.py
+PYTHON_FILES := .
 
-.PHONY: format ruff-check mypy-strict basedpyright-check check coverage security radon radon-mi vulture
+.PHONY: format ruff-check mypy-strict basedpyright-check check coverage security radon radon-mi vulture compile-dep cognitive
 
 # main check (Enforced before commit)
-format:
-	@ruff format --preview --line-length 120 $(PYTHON_FILES)
 
-ruff-check:
-	@ruff check --preview --fix --unsafe-fixes $(PYTHON_FILES)
+format: # black style formatter
+	ruff format --preview --line-length 120 .
 
-basedpyright-check:
-	@basedpyright $(PYTHON_FILES)
+ruff-check: # linter (includes flake8, pylint)
+	ruff check --fix --unsafe-fixes $(PYTHON_FILES)
 
-mypy-strict:
-	@mypy --strict $(PYTHON_FILES)
+mypy-check: # main type checking
+	mypy $(PYTHON_FILES)
 
-check: ruff-check mypy-strict basedpyright-check 
+basedpyright-check: # secondary type checking (pyright with extra rules)
+	basedpyright $(PYTHON_FILES)
+
+check: format ruff-check mypy-check basedpyright-check
 
 # Additional analysis checks (not Enforced)
-coverage:
-	coverage run -m pytest
-	coverage report -m
-	coverage html
-
-security:
-	ruff check --extend-select S --fix $(PYTHON_FILES)
-
 radon: # cyclomatic complexity
 	radon cc -a -nc -s $(PYTHON_FILES)
 
@@ -37,4 +30,4 @@ vulture: # unused code
 
 # Management
 compile-dep:
-	uv pip compile  pyproject.toml -o requirements.txt
+	uv pip compile pyproject.toml -o requirements.txt

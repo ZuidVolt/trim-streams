@@ -15,3 +15,13 @@ trim_streams.onefile-build/
 .DS_Store
 trim-streams
 __init__.py
+# Python cache files
+*.py[cod]
+*$py.class
+.pytest_cache/
+# Virtual environments
+venv/
+env/
+# IDE specific files
+.idea/
+# Miscellaneous
