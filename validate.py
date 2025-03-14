@@ -45,8 +45,9 @@ def validate_dependencies() -> bool:
 
     # Check Python dependencies
     for dependency in required_dependencies:
-        dist = pkg_resources.find_distributions(dependency)
-        if dist is None:
+        try:
+            pkg_resources.get_distribution(dependency)
+        except pkg_resources.DistributionNotFound:
             log_error_and_return_false(
                 (
                     f"Missing required Python dependency: {dependency}. "

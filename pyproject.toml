@@ -25,9 +25,10 @@ unsafe-fixes = true
 preview = true
 
 [tool.mypy]
+strict = true
 
 [tool.pyright]
-typeCheckingMode = "off"
+typeCheckingMode = "strict"
 pythonVersion = "3.10"
 reportUnusedCallResult = false
 reportAny = false
