@@ -28,8 +28,16 @@ class StreamInfo(BaseModel):
 
     index: int
     codec_type: str
-    language: str = Field(alias="tags.language", default="und")
+    tags: dict[str, str] | None = None
     codec_name: str | None = None
+
+    @property
+    def language(self) -> str:
+        """Extract language from tags, defaulting to 'und' if not present."""
+        if self.tags and "language" in self.tags:
+            # Use .get() for safety, though 'in' check is sufficient
+            return self.tags.get("language", "und")
+        return "und"
 
 
 class ProbeData(BaseModel):
