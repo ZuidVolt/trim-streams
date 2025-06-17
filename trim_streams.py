@@ -35,7 +35,6 @@ class StreamInfo(BaseModel):
     def language(self) -> str:
         """Extract language from tags, defaulting to 'und' if not present."""
         if self.tags and "language" in self.tags:
-            # Use .get() for safety, though 'in' check is sufficient
             return self.tags.get("language", "und")
         return "und"
 
@@ -62,6 +61,7 @@ class ProcessingConfig(BaseModel):
     subtitle_langs: tuple[str, ...] = ("eng",)
     copy_streams: bool = True
     verify_output: bool = True
+    concurrency: int = 4
 
     @field_validator("audio_langs", "subtitle_langs")
     @classmethod
@@ -127,15 +127,15 @@ class AsyncVideoProcessor:
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
+        # The 'await process.wait()' handles waiting for completion.
+        # This loop is for debug-level live output from ffmpeg if needed.
         while True:
             if process.stderr is None:
                 continue
-
             line = await process.stderr.readline()
             if not line:
                 break
-
-            self.logger.debug(f"FFmpeg: {line.decode().strip()}")
+            self.logger.debug(f"FFmpeg ({file_name}): {line.decode().strip()}")
 
         if await process.wait() != 0:
             msg = f"FFmpeg failed for {file_name} (code {process.returncode})"
@@ -166,7 +166,12 @@ class AsyncVideoProcessor:
             msg = f"No video stream found in {file_name}"
             raise FFProbeError(msg)
         if not mappings:
-            msg = f"No streams matched languages in {file_name}"
+            # Check if any audio streams were supposed to be kept but weren't found
+            has_audio = any(s.codec_type == "audio" for s in probe_data.streams)
+            if has_audio and not any(m == "-map" and m.startswith("0:a") for m in mappings):
+                msg = f"No audio streams matched the desired languages in {file_name}"
+            else:
+                msg = f"No streams matched languages in {file_name}"
             raise FFProbeError(msg)
 
         return mappings
@@ -183,14 +188,10 @@ class AsyncVideoProcessor:
     async def process_file(self, input_file: Path, output_file: Path) -> ProcessingResult:
         """Full async processing pipeline for a video file."""
         try:
-            # Create parent directory if required
             output_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Stream analysis
             probe_data = await self.probe_file(input_file)
             mappings = await self.generate_mapping(probe_data, input_file.name)
 
-            # Build processing command
             cmd = [
                 "ffmpeg",
                 "-v",
@@ -199,25 +200,21 @@ class AsyncVideoProcessor:
                 "-i",
                 str(input_file),
                 *mappings,
-                "-c",
-                "copy" if self.config.copy_streams else "auto",
-                "-y",
-                str(output_file),
             ]
+            if self.config.copy_streams:
+                cmd.extend(["-c", "copy"])
 
-            # Execute processing
+            cmd.extend(["-y", str(output_file)])
+
             await self.run_ffmpeg(cmd, input_file.name)
 
-            # Optional verification
             if self.config.verify_output:
                 await self.verify_output(output_file)
 
-            return ProcessingResult(input_file=input_file, success=True, message=f"Processed: {input_file.name}")
+            return ProcessingResult(input_file=input_file, success=True)
 
-        except (FFProbeError, FFMPEGError) as e:
-            return ProcessingResult(
-                input_file=input_file, success=False, message=f"Processing failed: {type(e).__name__} - {e}"
-            )
+        except (FFProbeError, FFMPEGError, PermissionError) as e:
+            return ProcessingResult(input_file=input_file, success=False, message=f"{type(e).__name__}: {e}")
 
 
 async def async_main() -> None:
@@ -236,53 +233,71 @@ async def async_main() -> None:
     )
     parser.add_argument("--no-copy", action="store_true", help="Re-encode streams instead of copying")
     parser.add_argument("--no-verify", action="store_true", help="Skip output verification")
+    parser.add_argument("--concurrency", type=int, default=4, help="Number of files to process at once (default: 4)")
     args = parser.parse_args()
 
-    # Validate input path
     input_path = Path(args.input_path).resolve()
     if not input_path.exists():
         logger.error(f"Invalid path: {input_path}")
         return
 
-    # Configure processing
     config = ProcessingConfig(
         audio_langs=args.audio_langs,
         subtitle_langs=args.subtitle_langs,
         copy_streams=not args.no_copy,
         verify_output=not args.no_verify,
+        concurrency=args.concurrency,
     )
 
-    # Collect target files
     if input_path.is_file():
-        files = [input_path]
+        all_files = [input_path]
     else:
-        files = [p for p in input_path.rglob("*") if p.is_file() and p.parent.name != "processed" and is_video_file(p)]
+        all_files = [
+            p for p in input_path.rglob("*") if p.is_file() and p.parent.name != "processed" and is_video_file(p)
+        ]
 
-    # Process all videos
+    files_to_process = [f for f in all_files if not create_output_path(f).exists()]
+    skipped_count = len(all_files) - len(files_to_process)
+    if skipped_count > 0:
+        logger.info(f"Skipping {skipped_count} file(s) that already exist in the output directory.")
+
+    if not files_to_process:
+        logger.info("No new video files to process.")
+        return
+
     processor = AsyncVideoProcessor(config)
-    tasks = [processor.process_file(input_file=file, output_file=create_output_path(file)) for file in files]
+    semaphore = asyncio.Semaphore(config.concurrency)
 
-    # Execute with progress tracking
-    results = await asyncio.gather(*tasks)
+    async def worker(file: Path) -> ProcessingResult:
+        """Worker to acquire semaphore before processing."""
+        async with semaphore:
+            return await processor.process_file(input_file=file, output_file=create_output_path(file))
 
-    # Summarize results
-    success_count = sum(1 for r in results if r.success)
-    for result in results:
+    tasks = [worker(file) for file in files_to_process]
+    success_count = 0
+    total_files = len(files_to_process)
+
+    logger.info(f"Starting to process {total_files} file(s) with concurrency level {config.concurrency}...")
+
+    for i, future in enumerate(asyncio.as_completed(tasks), 1):
+        result = await future
         if result.success:
-            logger.info(result.message)
+            success_count += 1
+            logger.info(f"[{i}/{total_files}] SUCCESS: {result.input_file.name}")
         else:
-            logger.error(result.message)
+            logger.error(f"[{i}/{total_files}] FAILED : {result.input_file.name} | Reason: {result.message}")
 
-    logger.info(f"Processed {success_count}/{len(files)} files successfully")
+    logger.info(f"Processing complete! Successfully processed {success_count}/{total_files} files.")
 
 
 def main() -> None:
     logger = logging.getLogger("main")
     setup_logging()
     try:
+        # To-Do: Add dependency checks for ffmpeg/ffprobe here if desired
         asyncio.run(async_main())
     except KeyboardInterrupt:
-        logger.warning("\nProcessing interrupted by user")
+        logger.warning("\nProcessing interrupted by user.")
 
 
 if __name__ == "__main__":
