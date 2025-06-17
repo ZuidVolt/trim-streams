@@ -1,17 +1,16 @@
-"""Remove unwanted language tracks from video files."""
+"""Remove unwanted language tracks from video files using async processing."""
 
 import argparse
+import asyncio
 import json
 import logging
-import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypedDict
 
-from pydantic import BaseModel, Field
-
-from validate import validate_dependencies, validate_system_resources
+from pydantic import BaseModel, Field, field_validator
 
 
+# ===== SECTION: Type Definitions and Data Structures =====
 class ProcessorError(Exception):
     """Base error for video processing."""
 
@@ -24,218 +23,220 @@ class FFMPEGError(ProcessorError):
     """FFmpeg specific errors."""
 
 
-class StreamDict(TypedDict):
-    """Stream information dictionary."""
+class StreamInfo(BaseModel):
+    """Individual stream metadata from FFprobe."""
 
     index: int
     codec_type: str
-    codec_name: str | None
-    tags: dict[str, str] | None
-    language: str | None
+    language: str = Field(alias="tags.language", default="und")
+    codec_name: str | None = None
 
 
-class ProbeData(TypedDict):
-    """FFprobe output data structure."""
+class ProbeData(BaseModel):
+    """Structured FFprobe output."""
 
-    streams: list[StreamDict]
-    format: dict[str, Any]
+    streams: list[StreamInfo] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ProcessingResult:
+    """Immutable result container for processing operations."""
+
+    input_file: Path
+    success: bool
+    message: str = ""
 
 
 class ProcessingConfig(BaseModel):
-    """Configuration model for video stream processing.
+    """Configuration for video processing operations."""
 
-    Attributes:
-        audio_langs (list[str]): List of audio language codes to keep (e.g., ['eng', 'kor', 'jpn'])
-        subtitle_langs (list[str]): List of subtitle language codes to keep (e.g., ['eng'])
-        copy_streams (bool): Whether to use stream copy mode (True) or re-encode (False)
-        verify_output (bool): Whether to verify the output file after processing
-    """
+    audio_langs: tuple[str, ...] = ("eng", "kor", "jpn")
+    subtitle_langs: tuple[str, ...] = ("eng",)
+    copy_streams: bool = True
+    verify_output: bool = True
 
-    audio_langs: list[str] = Field(default=["eng", "kor", "jpn"])
-    subtitle_langs: list[str] = Field(default=["eng"])
-    copy_streams: bool = Field(default=True)
-    verify_output: bool = Field(default=True)
-
-    class Config:
-        """allows arbitrary-type runtime type checking."""
-
-        arbitrary_types_allowed: bool = True
+    @field_validator("audio_langs", "subtitle_langs")
+    @classmethod
+    def convert_to_tuple(cls, v: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+        """Convert list to tuple if needed."""
+        return tuple(v) if isinstance(v, list) else v
 
 
-class VideoProcessor:
-    """Handles video file processing to remove unwanted language tracks.
+# ===== SECTION: Pure Functions =====
+def create_output_path(input_path: Path) -> Path:
+    """Generate output path preserving directory structure."""
+    output_dir = input_path.parent / "processed"
+    return output_dir / input_path.name
 
-    This class manages the analysis and processing of video files, allowing selective
-    retention of audio and subtitle tracks based on language preferences.
 
-    Args:
-        input_file (Path): Path to the input video file
-        config (ProcessingConfig): Processing configuration settings
-
-    Attributes:
-        input_file (Path): Path to the input video file
-        config (ProcessingConfig): Processing configuration settings
-        status (ProcessingStatus): Current processing status
-        probe_data (ProbeData | None): Cached FFprobe data
-        logger (logging.Logger): Logger instance
-
-    Raises:
-        FFProbeError: When FFprobe analysis fails
-        FFMPEGError: When FFmpeg processing fails
-        ProcessorError: For general processing errors
-    """
-
-    def __init__(self, input_file: Path, config: ProcessingConfig) -> None:
-        """Initialize the VideoProcessor with input file and configuration."""
-        self.input_file: Path = input_file
-        self.config: ProcessingConfig = config
-        self.probe_data: ProbeData | None = None
-        self.logger: logging.Logger = logging.getLogger(__name__)
-
-    def probe_file(self, file_path: Path | None = None) -> ProbeData:
-        """Probe the video file to get stream information.
-
-        Args:
-            file_path (Path | None): Path to the file to probe. If None, probes the input file.
-
-        Returns:
-            ProbeData: The probed data containing stream information.
-
-        Raises:
-            FFProbeError: If FFprobe fails or the output is invalid.
-        """
-        if file_path is None and self.probe_data is not None:
-            return self.probe_data
-
-        target_path = file_path or self.input_file
-        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(target_path)]
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            probe_data: ProbeData = json.loads(result.stdout)
-
-            if file_path is None:
-                self.probe_data = probe_data
-
-            return probe_data
-
-        except subprocess.CalledProcessError as e:
-            raise FFProbeError(f"FFprobe failed with return code {e.returncode}: {e.stderr}") from e
-        except json.JSONDecodeError as e:
-            raise FFProbeError(f"Failed to parse FFprobe output: {e!s}") from e
-
-    def get_stream_mappings(self) -> list[str]:
-        """Generate ffmpeg mapping arguments based on language preferences."""
-        if self.probe_data is None:
-            self.probe_data = self.probe_file()
-
-        mappings: list[str] = []
-        video_mapped: bool = False
-
-        for stream in self.probe_data["streams"]:
-            index: int = stream["index"]
-            codec_type: str = stream["codec_type"]
-            tags: Any = stream.get("tags", {})
-            language: str = tags.get("language", "und")
-
-            if codec_type == "video" and not video_mapped:
-                mappings.extend(["-map", f"0:{index}"])
-                video_mapped = True
-                self.logger.debug(f"Mapped video stream: {index}")
-            elif codec_type == "audio" and language in self.config.audio_langs:
-                mappings.extend(["-map", f"0:{index}"])
-                self.logger.debug(f"Mapped audio stream: {index} ({language})")
-            elif codec_type == "subtitle" and language in self.config.subtitle_langs:
-                mappings.extend(["-map", f"0:{index}"])
-                self.logger.debug(f"Mapped subtitle stream: {index} ({language})")
-
-        if not video_mapped:
-            raise FFProbeError(f"No video stream in '{self.input_file.name}'")
-        if not mappings:
-            raise FFProbeError(f"No matching streams found in '{self.input_file.name}' for specified languages")
-
-        return mappings
-
-    def verify_output(self, output_file: Path) -> None:
-        """Verify the output file was created successfully."""
-        if not output_file.exists():
-            raise FFMPEGError(f"Failed to create: {output_file.name}")
-        if output_file.stat().st_size == 0:
-            raise FFMPEGError(f"Empty output file: {output_file.name}")
-
-        try:
-            self.probe_file()
-        except FFProbeError as e:
-            raise FFMPEGError(f"Output file verification failed: {e!s}") from e
-
-    def process(self, output_file: Path) -> None:
-        """Process the video file, keeping only specified language tracks."""
-        try:
-            mappings = self.get_stream_mappings()
-            cmd = ["ffmpeg", "-i", str(self.input_file), *mappings]
-
-            if self.config.copy_streams:
-                cmd.extend(["-c", "copy"])
-
-            cmd.append(str(output_file))
-            subprocess.run(cmd, check=True, capture_output=True)
-
-            if self.config.verify_output:
-                self.verify_output(output_file)
-
-        except subprocess.CalledProcessError as e:
-            error_output = e.stderr.decode("utf-8", errors="replace")
-            raise FFMPEGError(f"FFMPEG failed with return code {e.returncode}: {error_output}") from e
-        except Exception:
-            raise
+def is_video_file(path: Path) -> bool:
+    """Check if file has video extension."""
+    return path.suffix.lower() in {".mkv", ".mp4", ".avi", ".mov"}
 
 
 def setup_logging() -> None:
-    """Configure logging settings."""
+    """Initialize structured logging."""
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s | %(levelname)-8s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    logging.captureWarnings(capture=True)
 
 
-def main() -> None:
-    """Main function to process video files and remove unwanted language tracks."""
-    setup_logging()
-    logger = logging.getLogger(__name__)
+# ===== SECTION: Stateful Functions / Classes =====
+class AsyncVideoProcessor:
+    """Async processor for video stream manipulation."""
 
-    parser = argparse.ArgumentParser(description="Remove unwanted language tracks from video files")
-    parser.add_argument("input_path", type=str, help="Input video file or directory")
+    def __init__(self, config: ProcessingConfig) -> None:
+        self.config = config
+        self.logger = logging.getLogger("AsyncVideoProcessor")
+
+    async def probe_file(self, file_path: Path) -> ProbeData:
+        """Async video file analysis using FFprobe."""
+        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", str(file_path)]
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                msg = f"FFprobe error: {stderr.decode().strip()}"
+                raise FFProbeError(msg)
+
+            return ProbeData(**json.loads(stdout))
+
+        except (json.JSONDecodeError, TypeError) as e:
+            msg = f"Probe data parsing failed: {e}"
+            raise FFProbeError(msg) from e
+
+    async def run_ffmpeg(self, cmd: list[str], file_name: str) -> None:
+        """Execute FFmpeg command with progress logging."""
+        self.logger.debug(f"Executing: {' '.join(cmd)}")
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
+        while True:
+            if process.stderr is None:
+                continue
+
+            line = await process.stderr.readline()
+            if not line:
+                break
+
+            self.logger.debug(f"FFmpeg: {line.decode().strip()}")
+
+        if await process.wait() != 0:
+            msg = f"FFmpeg failed for {file_name} (code {process.returncode})"
+            raise FFMPEGError(msg)
+
+    async def generate_mapping(self, probe_data: ProbeData, file_name: str) -> list[str]:
+        """Build stream map based on language preferences."""
+        video_mapped = False
+        mappings: list[str] = []
+
+        for stream in probe_data.streams:
+            idx = stream.index
+
+            if stream.codec_type == "video" and not video_mapped:
+                mappings.extend(["-map", f"0:{idx}"])
+                video_mapped = True
+                self.logger.debug(f"Mapped video stream {idx}")
+
+            elif stream.codec_type == "audio" and stream.language in self.config.audio_langs:
+                mappings.extend(["-map", f"0:{idx}"])
+                self.logger.debug(f"Mapped audio stream {idx} ({stream.language})")
+
+            elif stream.codec_type == "subtitle" and stream.language in self.config.subtitle_langs:
+                mappings.extend(["-map", f"0:{idx}"])
+                self.logger.debug(f"Mapped subtitle stream {idx} ({stream.language})")
+
+        if not video_mapped:
+            msg = f"No video stream found in {file_name}"
+            raise FFProbeError(msg)
+        if not mappings:
+            msg = f"No streams matched languages in {file_name}"
+            raise FFProbeError(msg)
+
+        return mappings
+
+    async def verify_output(self, output_file: Path) -> None:
+        """Validate processing output existence and content."""
+        if not output_file.exists():
+            msg = f"Output not created: {output_file.name}"
+            raise FFMPEGError(msg)
+        if output_file.stat().st_size == 0:
+            msg = f"Empty output file: {output_file.name}"
+            raise FFMPEGError(msg)
+
+    async def process_file(self, input_file: Path, output_file: Path) -> ProcessingResult:
+        """Full async processing pipeline for a video file."""
+        try:
+            # Create parent directory if required
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Stream analysis
+            probe_data = await self.probe_file(input_file)
+            mappings = await self.generate_mapping(probe_data, input_file.name)
+
+            # Build processing command
+            cmd = [
+                "ffmpeg",
+                "-v",
+                "warning",
+                "-stats",
+                "-i",
+                str(input_file),
+                *mappings,
+                "-c",
+                "copy" if self.config.copy_streams else "auto",
+                "-y",
+                str(output_file),
+            ]
+
+            # Execute processing
+            await self.run_ffmpeg(cmd, input_file.name)
+
+            # Optional verification
+            if self.config.verify_output:
+                await self.verify_output(output_file)
+
+            return ProcessingResult(input_file=input_file, success=True, message=f"Processed: {input_file.name}")
+
+        except (FFProbeError, FFMPEGError) as e:
+            return ProcessingResult(
+                input_file=input_file, success=False, message=f"Processing failed: {type(e).__name__} - {e}"
+            )
+
+
+async def async_main() -> None:
+    """Async entry point for video processing."""
+    logger = logging.getLogger("async_main")
+
+    parser = argparse.ArgumentParser(
+        description=("Language-focused video stream processor | Removes unwanted audio/subtitle tracks")
+    )
+    parser.add_argument("input_path", type=str, help="Input file/directory")
     parser.add_argument(
-        "--audio-langs",
-        nargs="+",
-        type=str,
-        default=["eng", "en", "kor", "jpn", "chi", "zho", "cmn"],
-        help="List of audio language codes to keep (default: eng, kor, jpn, chi)",
+        "--audio-langs", nargs="+", default=["eng", "kor", "jpn"], help="Audio languages to retain (space separated)"
     )
     parser.add_argument(
-        "--subtitle-langs",
-        nargs="+",
-        type=str,
-        default=["eng"],
-        help="List of subtitle language codes to keep (default: eng)",
+        "--subtitle-langs", nargs="+", default=["eng"], help="Subtitle languages to retain (space separated)"
     )
-    parser.add_argument("--no-copy", action="store_true", help="Don't use stream copy mode (will re-encode streams)")
-    parser.add_argument("--no-verify", action="store_true", help="Skip output file verification")
-
+    parser.add_argument("--no-copy", action="store_true", help="Re-encode streams instead of copying")
+    parser.add_argument("--no-verify", action="store_true", help="Skip output verification")
     args = parser.parse_args()
+
+    # Validate input path
     input_path = Path(args.input_path).resolve()
-
     if not input_path.exists():
-        logger.error(f"Input path does not exist: {input_path}")
+        logger.error(f"Invalid path: {input_path}")
         return
 
-    if not validate_dependencies():
-        logger.error("process stopped due to missing dependencies.")
-        return
-
-    validate_system_resources()
-
+    # Configure processing
     config = ProcessingConfig(
         audio_langs=args.audio_langs,
         subtitle_langs=args.subtitle_langs,
@@ -243,48 +244,37 @@ def main() -> None:
         verify_output=not args.no_verify,
     )
 
-    output_dir = input_path / "processed"
-    try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-    except PermissionError as e:
-        logger.exception(f"Permission denied: Unable to create output directory at {output_dir}")
-        logger.exception("Failed to create output directory", exc_info=e)
-        return
-
+    # Collect target files
     if input_path.is_file():
-        files_to_process = [input_path]
+        files = [input_path]
     else:
-        files_to_process = [
-            f
-            for f in input_path.rglob("*")
-            if f.is_file() and f.parent.name != "processed" and f.suffix.lower() in {".mkv", ".mp4", ".avi", ".mov"}
-        ]
+        files = [p for p in input_path.rglob("*") if p.is_file() and p.parent.name != "processed" and is_video_file(p)]
 
-    success_count = 0
-    total_files = len(files_to_process)
+    # Process all videos
+    processor = AsyncVideoProcessor(config)
+    tasks = [processor.process_file(input_file=file, output_file=create_output_path(file)) for file in files]
 
-    for video_file in files_to_process:
-        try:
-            logger.info(f"Processing [{success_count + 1}/{total_files}]: {video_file.name}")
-            output_file = output_dir / video_file.name
+    # Execute with progress tracking
+    results = await asyncio.gather(*tasks)
 
-            if output_file.exists():
-                logger.warning(f"Output file already exists, skipping: {output_file}")
-                continue
+    # Summarize results
+    success_count = sum(1 for r in results if r.success)
+    for result in results:
+        if result.success:
+            logger.info(result.message)
+        else:
+            logger.error(result.message)
 
-            processor = VideoProcessor(video_file, config)
-            processor.process(output_file)
-            success_count += 1
-            logger.info(f"Successfully processed: {video_file.name}")
+    logger.info(f"Processed {success_count}/{len(files)} files successfully")
 
-        except (FFProbeError, FFMPEGError) as e:
-            logger.exception(f"Failed to process {video_file.name}")
-            logger.exception("Processing error", exc_info=e)
-        except Exception as e:
-            logger.exception(f"Unexpected error processing {video_file.name}")
-            logger.exception("Unexpected error", exc_info=e)
 
-    logger.info(f"Processing complete! Successfully processed {success_count}/{total_files} files")
+def main() -> None:
+    logger = logging.getLogger("main")
+    setup_logging()
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        logger.warning("\nProcessing interrupted by user")
 
 
 if __name__ == "__main__":

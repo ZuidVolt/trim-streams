@@ -63,7 +63,7 @@ def validate_dependencies() -> bool:
         log_error_and_return_false(
             "Missing dependency: ffmpeg. Please install ffmpeg and make sure it's available in the system's PATH.",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error_and_return_false(f"An unexpected error occurred while checking ffmpeg availability: {e}.")
 
     logger.info("All dependencies are installed and available.")
@@ -81,5 +81,5 @@ def validate_system_resources() -> None:
             )
     except (FileNotFoundError, PermissionError) as e:
         log_error(f"Directory error: {e}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log_error(f"Unexpected error during resource validation: {e}")
