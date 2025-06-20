@@ -10,8 +10,6 @@ pydantic-core==2.27.2
     # via
     #   trim-streams (pyproject.toml)
     #   pydantic
-setuptools==75.6.0
-    # via trim-streams (pyproject.toml)
 typing-extensions==4.12.2
     # via
     #   pydantic

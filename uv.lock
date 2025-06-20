@@ -129,6 +129,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "annotated-types" },
     { name = "pydantic" },
+    { name = "pydantic-core" },
 ]
 
 [package.dev-dependencies]
@@ -142,6 +143,7 @@ dev = [
 requires-dist = [
     { name = "annotated-types" },
     { name = "pydantic" },
+    { name = "pydantic-core" },
 ]
 
 [package.metadata.requires-dev]

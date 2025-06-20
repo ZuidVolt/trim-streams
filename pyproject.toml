@@ -8,7 +8,6 @@ dependencies = [
     "pydantic",
     "pydantic-core",
     "annotated-types",
-    "setuptools<81",
 ]
 
 [dependency-groups]
