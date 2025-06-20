@@ -5,7 +5,6 @@ import logging
 import subprocess
 
 import pkg_resources
-import psutil
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,10 +34,9 @@ def log_error_and_return_false(message: str) -> bool:
     return False
 
 
-def validate_dependencies() -> bool:
+def validate_dependencies(silent: bool = False) -> bool:  # noqa: FBT001, FBT002
     """Checks if the dependencies are installed correctly."""
     required_dependencies = {
-        "psutil",
         "pydantic",
         "pydantic-core",
     }
@@ -58,28 +56,14 @@ def validate_dependencies() -> bool:
     # Check if ffmpeg is available
     try:
         subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        logger.info("FFmpeg is available in the system's PATH.")
+        if not silent:
+            logger.info("FFmpeg is available in the system's PATH.")
     except FileNotFoundError:
         log_error_and_return_false(
             "Missing dependency: ffmpeg. Please install ffmpeg and make sure it's available in the system's PATH.",
         )
     except Exception as e:  # noqa: BLE001
         log_error_and_return_false(f"An unexpected error occurred while checking ffmpeg availability: {e}.")
-
-    logger.info("All dependencies are installed and available.")
+    if not silent:
+        logger.info("All dependencies are installed and available.")
     return True
-
-
-def validate_system_resources() -> None:
-    """Validate system resources before encoding."""
-    try:
-        available_memory = psutil.virtual_memory().available
-        min_required_memory_gb = MIN_REQUIRED_MEMORY / (1024**3)
-        if available_memory <= MIN_REQUIRED_MEMORY:
-            log_warning(
-                f"Low memory available. Recommended: {min_required_memory_gb:.2f} GB or more. Processing may be slow.",
-            )
-    except (FileNotFoundError, PermissionError) as e:
-        log_error(f"Directory error: {e}")
-    except Exception as e:  # noqa: BLE001
-        log_error(f"Unexpected error during resource validation: {e}")

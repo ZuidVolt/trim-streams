@@ -5,11 +5,10 @@ description = ""
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "psutil",
-    "types-psutil",
     "pydantic",
-    "setuptools",
-    "types-setuptools",
+    "pydantic-core",
+    "annotated-types",
+    "setuptools<81",
 ]
 
 [dependency-groups]
