@@ -19,7 +19,7 @@ VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".mov"}
 STREAM_TYPES = {"VIDEO": "video", "AUDIO": "audio", "SUBTITLE": "subtitle"}
 
 
-# ===== SECTION: Type Definitions and Data Structures =====
+# ===== SECTION: Type Definitions and Data Strfuctures =====
 class ProcessorError(Exception):
     """Base error for video processing."""
 
@@ -109,6 +109,20 @@ def setup_logging() -> None:
     logging.captureWarnings(capture=True)
 
 
+def select_primary_video_stream(video_streams: list[StreamInfo]) -> StreamInfo:
+    """Select primary video stream - error if multiple streams found."""
+    if not video_streams:
+        msg = "No video streams available for selection"
+        raise FFProbeError(msg)
+
+    if len(video_streams) == 1:
+        return video_streams[0]
+
+    # Error on multiple video streams - let user handle this case
+    msg = f"Multiple video streams found ({len(video_streams)}). Please specify which stream to use."
+    raise FFProbeError(msg)
+
+
 def filter_streams_by_type_and_language(streams: list[StreamInfo], config: ProcessingConfig) -> FilteredStreams:
     """Pure function to filter streams by type and language preferences."""
     video_streams: list[StreamInfo] = []
@@ -140,20 +154,37 @@ def validate_filtered_streams(filtered: FilteredStreams, file_name: str) -> None
 
 
 def build_ffmpeg_stream_mappings(filtered: FilteredStreams) -> list[str]:
-    """Build FFmpeg stream mapping arguments from filtered streams."""
+    """Build FFmpeg stream mapping arguments with validation."""
     mappings: list[str] = []
+    mapped_indices: set[int] = set()
 
-    # Map first video stream
+    # Map primary video stream
     if filtered.video:
-        mappings.extend(["-map", f"0:{filtered.video[0].index}"])
+        primary_video = select_primary_video_stream(filtered.video)
+        if primary_video.index in mapped_indices:
+            msg = f"Duplicate stream mapping detected for index {primary_video.index}"
+            raise FFMPEGError(msg)
+        mappings.extend(["-map", f"0:{primary_video.index}"])
+        mapped_indices.add(primary_video.index)
 
     # Map all filtered audio streams
     for stream in filtered.audio:
+        if stream.index in mapped_indices:
+            continue  # Skip duplicate mappings
         mappings.extend(["-map", f"0:{stream.index}"])
+        mapped_indices.add(stream.index)
 
     # Map all filtered subtitle streams
     for stream in filtered.subtitle:
+        if stream.index in mapped_indices:
+            continue  # Skip duplicate mappings
         mappings.extend(["-map", f"0:{stream.index}"])
+        mapped_indices.add(stream.index)
+
+    # Validate we have at least one stream mapped
+    if not mappings:
+        msg = "No streams selected for mapping"
+        raise FFMPEGError(msg)
 
     return mappings
 
@@ -182,6 +213,23 @@ def build_ffmpeg_command(
     return cmd
 
 
+async def _run_subprocess_with_timeout(cmd: list[str], timeout: float) -> tuple[bytes, bytes, int]:  # noqa: ASYNC109
+    """Helper function to run subprocess with timeout and basic error handling."""
+    process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        return stdout, stderr, process.returncode or 0
+    except TimeoutError:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5.0)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+        raise
+
+
 # ===== SECTION: I/O Operations =====
 class StreamProber:
     """Handles FFprobe operations."""
@@ -189,22 +237,27 @@ class StreamProber:
     def __init__(self) -> None:
         self.logger = logging.getLogger("StreamProber")
 
-    async def probe_file(self, file_path: Path) -> ProbeData:
+    async def probe_file(self, file_path: Path, *, timeout: float = 30.0) -> ProbeData:  # noqa: ASYNC109
         """Async video file analysis using FFprobe."""
         cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", "-show_format", str(file_path)]
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
+            stdout, stderr, returncode = await _run_subprocess_with_timeout(cmd, timeout)
 
-            if process.returncode != 0:
-                msg = f"FFprobe failed for {file_path.name}: {stderr.decode().strip()}"
+            if returncode != 0:
+                error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                msg = f"FFprobe failed for {file_path.name}: {error_msg}"
+                raise FFProbeError(msg)
+
+            if not stdout:
+                msg = f"FFprobe returned empty output for {file_path.name}"
                 raise FFProbeError(msg)
 
             return ProbeData(**json.loads(stdout))
 
+        except TimeoutError as e:
+            msg = f"FFprobe timeout ({timeout}s) for {file_path.name}"
+            raise FFProbeError(msg) from e
         except (json.JSONDecodeError, TypeError) as e:
             msg = f"Failed to parse probe data for {file_path.name}: {e}"
             raise FFProbeError(msg) from e
@@ -216,20 +269,21 @@ class CommandExecutor:
     def __init__(self) -> None:
         self.logger = logging.getLogger("CommandExecutor")
 
-    async def execute_ffmpeg(self, cmd: list[str], file_name: str) -> None:
-        """Execute FFmpeg command with error handling."""
+    async def execute_ffmpeg(self, cmd: list[str], file_name: str, *, timeout: float = 300.0) -> None:  # noqa: ASYNC109
+        """Execute FFmpeg command."""
         self.logger.debug(f"Executing: {' '.join(cmd)}")
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        try:
+            _, stderr, returncode = await _run_subprocess_with_timeout(cmd, timeout)
 
-        _, stderr = await process.communicate()
+            if returncode != 0:
+                error_msg = stderr.decode().strip() if stderr else "Unknown error"
+                msg = f"FFmpeg failed for {file_name}: {error_msg}"
+                raise FFMPEGError(msg)
 
-        if process.returncode != 0:
-            error_msg = stderr.decode().strip() if stderr else "Unknown error"
-            msg = f"FFmpeg failed for {file_name}: {error_msg}"
-            raise FFMPEGError(msg)
+        except TimeoutError as e:
+            msg = f"FFmpeg timeout ({timeout}s) for {file_name}"
+            raise FFMPEGError(msg) from e
 
 
 def verify_output_file(output_file: Path) -> None:
