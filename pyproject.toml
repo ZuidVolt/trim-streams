@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [ "ruff", "radon", "vulture",]
+dev = [ "ruff", "radon", "mypy", "vulture",]
 
 [project.license]
 text = "Apache License"
@@ -37,6 +37,9 @@ mi = [ "-s",]
 preview = true
 select = [ "RUF", "D", "F", "W", "N", "I", "E", "A", "B", "Q", "PL", "C90", "UP", "RET", "SIM", "NPY", "PD", "ARG", "TID", "PTH", "ISC", "PIE", "YTT", "ASYNC", "C4", "T10", "COM", "RSE", "PGH", "PLR", "PLC", "PGH", "FURB", "PLW", "TRY", "PERF", "EXE", "DTZ", "INT", "ISC", "ICN", "LOG", "FLY", "EM", "SLF", "SLOT", "FBT", "BLE", "ANN", "TC",]
 ignore = [ "PLR0913", "PLR0911", "PLR0914", "PLR6301", "PD901", "E501", "G004", "RUF100", "PGH003", "PLR0911", "PLR0912", "COM812", "ISC001", "TRY003", "TRY300", "EXE001", "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",]
+
+[tool.pyrefly]
+python-version = "3.13.0"
 
 [tool.ruff.format]
 quote-style = "double"

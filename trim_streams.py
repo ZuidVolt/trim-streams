@@ -7,16 +7,16 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 from pydantic import BaseModel, Field, field_validator
 
 from validate import validate_dependencies
 
 # ===== SECTION: Constants =====
-PROCESSED_DIR = "processed"
-VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".mov"}
-STREAM_TYPES = {"VIDEO": "video", "AUDIO": "audio", "SUBTITLE": "subtitle"}
+PROCESSED_DIR: Final[str] = "processed"
+VIDEO_EXTENSIONS: Final[frozenset[str]] = frozenset({".mkv", ".mp4", ".avi", ".mov"})
+STREAM_TYPES: Final[dict[str, str]] = {"VIDEO": "video", "AUDIO": "audio", "SUBTITLE": "subtitle"}
 
 
 # ===== SECTION: Type Definitions and Data Strfuctures =====
@@ -423,10 +423,22 @@ def main() -> None:
     logger = logging.getLogger("main")
     setup_logging()
 
+    exit_code = 0
     try:
         asyncio.run(async_main())
     except KeyboardInterrupt:
-        logger.warning("\nProcessing interrupted by user")
+        logger.warning("Processing interrupted by user")
+        exit_code = 130  # Standard SIGINT exit code
+    except (RuntimeError, OSError):
+        logger.exception("Runtime error")
+        exit_code = 1
+    except Exception:
+        logger.exception("Unexpected error")
+        exit_code = 2
+    finally:
+        # Cleanup any remaining resources
+        logger.info("Shutting down gracefully")
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

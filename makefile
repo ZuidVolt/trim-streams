@@ -10,13 +10,13 @@ format: # black style formatter
 ruff-check: # linter (includes flake8, pylint)
 	ruff check --fix --unsafe-fixes $(PYTHON_FILES)
 
-mypy-check: # main type checking
-	mypy $(PYTHON_FILES)
-
 basedpyright-check: # secondary type checking (pyright with extra rules)
 	basedpyright $(PYTHON_FILES)
 
-check: format ruff-check mypy-check basedpyright-check
+pyrefly-check:
+	pyrefly check $(PYTHON_FILES)
+
+check: format ruff-check basedpyright-check pyrefly-check
 
 # Additional analysis checks (not Enforced)
 radon: # cyclomatic complexity
