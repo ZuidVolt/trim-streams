@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,8 @@ from validate import validate_dependencies
 PROCESSED_DIR: Final[str] = "processed"
 VIDEO_EXTENSIONS: Final[frozenset[str]] = frozenset({".mkv", ".mp4", ".avi", ".mov"})
 STREAM_TYPES: Final[dict[str, str]] = {"VIDEO": "video", "AUDIO": "audio", "SUBTITLE": "subtitle"}
+FILENAME_UNSAFE_CHARS: Final[re.Pattern[str]] = re.compile(r'[<>:"|?*\x00-\x1f]')
+MAX_FILENAME_LENGTH: Final[int] = 255
 
 
 # ===== SECTION: Type Definitions and Data Structures =====
@@ -125,22 +128,37 @@ def select_primary_video_stream(video_streams: list[StreamInfo]) -> StreamInfo:
 
 
 def filter_streams_by_type_and_language(streams: list[StreamInfo], config: ProcessingConfig) -> FilteredStreams:
-    """Pure function to filter streams by type and language preferences."""
+    """Pure function to filter streams by type and language preferences with warnings for discarded streams."""
     video_streams: list[StreamInfo] = []
     audio_streams: list[StreamInfo] = []
     subtitle_streams: list[StreamInfo] = []
+
+    discarded_audio: list[str] = []
+    discarded_subtitle: list[str] = []
 
     logger = logging.getLogger("filter_streams_by_type_and_language")
 
     for stream in streams:
         if stream.codec_type == STREAM_TYPES["VIDEO"]:
             video_streams.append(stream)
-        elif stream.codec_type == STREAM_TYPES["AUDIO"] and stream.language in config.audio_langs:
-            audio_streams.append(stream)
-        elif stream.codec_type == STREAM_TYPES["SUBTITLE"] and stream.language in config.subtitle_langs:
-            subtitle_streams.append(stream)
+        elif stream.codec_type == STREAM_TYPES["AUDIO"]:
+            if stream.language in config.audio_langs:
+                audio_streams.append(stream)
+            else:
+                discarded_audio.append(f"index {stream.index} ({stream.language})")
+        elif stream.codec_type == STREAM_TYPES["SUBTITLE"]:
+            if stream.language in config.subtitle_langs:
+                subtitle_streams.append(stream)
+            else:
+                discarded_subtitle.append(f"index {stream.index} ({stream.language})")
         elif stream.codec_type not in {STREAM_TYPES["VIDEO"], STREAM_TYPES["AUDIO"], STREAM_TYPES["SUBTITLE"]}:
             logger.warning(f"Encountered unexpected codec_type '{stream.codec_type}' (index {stream.index})")
+
+    # Warn about discarded streams
+    if discarded_audio:
+        logger.warning(f"Discarded audio streams: {', '.join(discarded_audio)}")
+    if discarded_subtitle:
+        logger.warning(f"Discarded subtitle streams: {', '.join(discarded_subtitle)}")
 
     return FilteredStreams(video=video_streams, audio=audio_streams, subtitle=subtitle_streams)
 
@@ -159,26 +177,40 @@ def validate_filtered_streams(filtered: FilteredStreams, file_name: str) -> None
 
 
 def build_ffmpeg_stream_mappings(filtered: FilteredStreams) -> list[str]:
-    """Build FFmpeg stream mapping arguments using type-qualified selectors."""
+    """Build FFmpeg stream mapping arguments using original stream indices."""
     mappings: list[str] = []
 
-    # Map primary video stream
+    # Map primary video stream using original index
     if filtered.video:
-        # Use the position in the filtered list as the stream number for type-qualified mapping
         primary_video = select_primary_video_stream(filtered.video)
-        video_idx = filtered.video.index(primary_video)
-        mappings.extend(["-map", f"0:v:{video_idx}"])
+        mappings.extend(["-map", f"0:{primary_video.index}"])
 
-    # Map all filtered audio streams
-    for i in range(len(filtered.audio)):
-        mappings.extend(["-map", f"0:a:{i}"])
+    # Map all filtered audio streams using original indices
+    for stream in filtered.audio:
+        mappings.extend(["-map", f"0:{stream.index}"])
 
-    # Map all filtered subtitle streams
-    for i in range(len(filtered.subtitle)):
-        mappings.extend(["-map", f"0:s:{i}"])
+    # Map all filtered subtitle streams using original indices
+    for stream in filtered.subtitle:
+        mappings.extend(["-map", f"0:{stream.index}"])
 
-    # Validate we have at least one stream mapped
     return mappings
+
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename to prevent command injection and filesystem issues."""
+    # Remove unsafe characters
+    sanitized = FILENAME_UNSAFE_CHARS.sub("_", filename)
+
+    # Truncate if too long (leave room for extension)
+    if len(sanitized) > MAX_FILENAME_LENGTH:
+        name_part = sanitized[: MAX_FILENAME_LENGTH - 10]  # Leave room for extension
+        sanitized = name_part + sanitized[len(name_part) :]
+
+    # Ensure it doesn't start with dangerous characters
+    if sanitized.startswith(("-", ".")):
+        sanitized = "_" + sanitized[1:]
+
+    return sanitized
 
 
 def build_ffmpeg_command(
@@ -187,46 +219,68 @@ def build_ffmpeg_command(
     stream_mappings: list[str],
     copy_streams: bool = True,  # noqa: FBT001, FBT002
 ) -> list[str]:
-    """Build complete FFmpeg command."""
+    """Build complete FFmpeg command with sanitized paths."""
+    # Sanitize output filename while preserving directory structure
+    sanitized_name = sanitize_filename(output_file.name)
+    safe_output_file = output_file.parent / sanitized_name
+
     cmd = [
         "ffmpeg",
         "-v",
         "warning",
         "-stats",
         "-i",
-        str(input_file),
+        str(input_file.resolve()),  # Use absolute paths
         *stream_mappings,
     ]
 
     if copy_streams:
         cmd.extend(["-c", "copy"])
 
-    cmd.extend(["-y", str(output_file)])
+    cmd.extend(["-y", str(safe_output_file.resolve())])
     return cmd
 
 
 async def _run_subprocess_with_timeout(cmd: list[str], timeout: float) -> tuple[bytes, bytes, int]:  # noqa: ASYNC109
-    """Helper function to run subprocess with timeout and basic error handling."""
-    process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-
+    """Helper function to run subprocess with proper timeout and cleanup handling."""
+    process = None
     try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         return stdout, stderr, process.returncode or 0
+
     except TimeoutError:
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=300.0)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-        raise
+        if process:
+            # First try graceful termination
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except TimeoutError:
+                # Force kill if graceful termination fails
+                process.kill()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except TimeoutError:
+                    # Log if we can't clean up properly
+                    logger = logging.getLogger("_run_subprocess_with_timeout")
+                    logger.exception(f"Failed to clean up process {process.pid}")
+        msg = f"Command timed out after {timeout}s"
+        raise TimeoutError(msg)  # noqa: B904
+
     except asyncio.CancelledError:
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=300.0)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
+        if process:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except TimeoutError:
+                process.kill()
+                try:  # noqa: SIM105
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except TimeoutError:
+                    pass  # Best effort cleanup
         raise
 
 
@@ -286,20 +340,45 @@ class CommandExecutor:
             raise FFMPEGError(msg) from e
 
 
-def verify_output_file(output_file: Path) -> None:
-    """Validate processing output existence and content."""
-    if not output_file.exists():
-        msg = f"Output file was not created: {output_file.name}"
-        raise FFMPEGError(msg)
+async def verify_output_file(output_file: Path) -> None:
+    """Validate processing output existence and content using async I/O."""
+    loop = asyncio.get_event_loop()
 
-    if output_file.stat().st_size == 0:
-        msg = f"Output file is empty: {output_file.name}"
-        raise FFMPEGError(msg)
+    try:
+        # Use thread pool for file system operations to avoid blocking
+        exists = await loop.run_in_executor(None, output_file.exists)
+        if not exists:
+            msg = f"Output file was not created: {output_file.name}"
+            raise FFMPEGError(msg)
+
+        stat_result = await loop.run_in_executor(None, output_file.stat)
+        if stat_result.st_size == 0:
+            msg = f"Output file is empty: {output_file.name}"
+            raise FFMPEGError(msg)
+
+    except OSError as e:
+        msg = f"Failed to verify output file {output_file.name}: {e}"
+        raise FFMPEGError(msg) from e
+
+
+async def safe_mkdir(path: Path) -> None:
+    """Thread-safe directory creation for async environments."""
+    loop = asyncio.get_event_loop()
+
+    def _mkdir() -> None:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except FileExistsError:
+            # Double-check it's actually a directory
+            if not path.is_dir():
+                raise
+
+    await loop.run_in_executor(None, _mkdir)
 
 
 # ===== SECTION: Main Processing Logic =====
 class VideoProcessor:
-    """Coordinates video processing operations."""
+    """Updated VideoProcessor with fixed logic."""
 
     def __init__(self, config: ProcessingConfig) -> None:
         self.config = config
@@ -310,8 +389,8 @@ class VideoProcessor:
     async def process_file(self, input_file: Path, output_file: Path) -> ProcessingResult:
         """Process a single video file through the complete pipeline."""
         try:
-            # Ensure output directory exists
-            output_file.parent.mkdir(parents=True, exist_ok=True)
+            # Thread-safe directory creation
+            await safe_mkdir(output_file.parent)
 
             # Step 1: Probe file for stream information
             probe_data = await self.prober.probe_file(input_file)
@@ -322,7 +401,7 @@ class VideoProcessor:
             # Step 3: Validate we have required streams
             validate_filtered_streams(filtered, input_file.name)
 
-            # Step 4: Build FFmpeg command
+            # Step 4: Build FFmpeg command with proper stream mapping
             stream_mappings = build_ffmpeg_stream_mappings(filtered)
             cmd = build_ffmpeg_command(input_file, output_file, stream_mappings, self.config.copy_streams)
 
@@ -331,12 +410,18 @@ class VideoProcessor:
 
             # Step 6: Verify output if requested
             if self.config.verify_output:
-                verify_output_file(output_file)
+                await verify_output_file(output_file)
 
             return ProcessingResult(input_file=input_file, success=True)
 
-        except (FFProbeError, FFMPEGError, PermissionError) as e:
+        except (FFProbeError, FFMPEGError, PermissionError, OSError) as e:
             error_msg = f"{type(e).__name__}: {e}"
+            self.logger.exception(f"Processing failed for {input_file.name}: {error_msg}")
+            return ProcessingResult(input_file=input_file, success=False, message=error_msg)
+        except Exception as e:
+            # Catch unexpected errors to prevent process crashes
+            error_msg = f"Unexpected error: {e}"
+            self.logger.exception(f"Unexpected error processing {input_file.name}")
             return ProcessingResult(input_file=input_file, success=False, message=error_msg)
 
 
