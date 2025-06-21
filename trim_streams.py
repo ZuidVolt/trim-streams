@@ -42,9 +42,9 @@ class StreamInfo(BaseModel):
 
     @property
     def language(self) -> str:
-        """Extract language from tags, defaulting to 'und' if not present."""
+        """Extract language from tags, lowercased and stripped, defaulting to 'und' if not present."""
         if self.tags and "language" in self.tags:
-            return self.tags.get("language", "und")
+            return self.tags.get("language", "und").strip().lower()
         return "und"
 
 
@@ -84,7 +84,8 @@ class ProcessingConfig(BaseModel):
     @classmethod
     def convert_to_tuple(cls, v: list[str] | tuple[str, ...]) -> tuple[str, ...]:
         """Convert list to tuple if needed."""
-        return tuple(v) if isinstance(v, list) else v
+        langs = tuple(v) if isinstance(v, list) else v
+        return tuple(lang.lower() for lang in langs)
 
 
 # ===== SECTION: Pure Functions =====
@@ -129,6 +130,8 @@ def filter_streams_by_type_and_language(streams: list[StreamInfo], config: Proce
     audio_streams: list[StreamInfo] = []
     subtitle_streams: list[StreamInfo] = []
 
+    logger = logging.getLogger("filter_streams_by_type_and_language")
+
     for stream in streams:
         if stream.codec_type == STREAM_TYPES["VIDEO"]:
             video_streams.append(stream)
@@ -136,6 +139,8 @@ def filter_streams_by_type_and_language(streams: list[StreamInfo], config: Proce
             audio_streams.append(stream)
         elif stream.codec_type == STREAM_TYPES["SUBTITLE"] and stream.language in config.subtitle_langs:
             subtitle_streams.append(stream)
+        elif stream.codec_type not in {STREAM_TYPES["VIDEO"], STREAM_TYPES["AUDIO"], STREAM_TYPES["SUBTITLE"]}:
+            logger.warning(f"Encountered unexpected codec_type '{stream.codec_type}' (index {stream.index})")
 
     return FilteredStreams(video=video_streams, audio=audio_streams, subtitle=subtitle_streams)
 
@@ -154,38 +159,25 @@ def validate_filtered_streams(filtered: FilteredStreams, file_name: str) -> None
 
 
 def build_ffmpeg_stream_mappings(filtered: FilteredStreams) -> list[str]:
-    """Build FFmpeg stream mapping arguments with validation."""
+    """Build FFmpeg stream mapping arguments using type-qualified selectors."""
     mappings: list[str] = []
-    mapped_indices: set[int] = set()
 
     # Map primary video stream
     if filtered.video:
+        # Use the position in the filtered list as the stream number for type-qualified mapping
         primary_video = select_primary_video_stream(filtered.video)
-        if primary_video.index in mapped_indices:
-            msg = f"Duplicate stream mapping detected for index {primary_video.index}"
-            raise FFMPEGError(msg)
-        mappings.extend(["-map", f"0:{primary_video.index}"])
-        mapped_indices.add(primary_video.index)
+        video_idx = filtered.video.index(primary_video)
+        mappings.extend(["-map", f"0:v:{video_idx}"])
 
     # Map all filtered audio streams
-    for stream in filtered.audio:
-        if stream.index in mapped_indices:
-            continue  # Skip duplicate mappings
-        mappings.extend(["-map", f"0:{stream.index}"])
-        mapped_indices.add(stream.index)
+    for i in range(len(filtered.audio)):
+        mappings.extend(["-map", f"0:a:{i}"])
 
     # Map all filtered subtitle streams
-    for stream in filtered.subtitle:
-        if stream.index in mapped_indices:
-            continue  # Skip duplicate mappings
-        mappings.extend(["-map", f"0:{stream.index}"])
-        mapped_indices.add(stream.index)
+    for i in range(len(filtered.subtitle)):
+        mappings.extend(["-map", f"0:s:{i}"])
 
     # Validate we have at least one stream mapped
-    if not mappings:
-        msg = "No streams selected for mapping"
-        raise FFMPEGError(msg)
-
     return mappings
 
 
@@ -223,7 +215,15 @@ async def _run_subprocess_with_timeout(cmd: list[str], timeout: float) -> tuple[
     except TimeoutError:
         process.terminate()
         try:
-            await asyncio.wait_for(process.wait(), timeout=5.0)
+            await asyncio.wait_for(process.wait(), timeout=300.0)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+        raise
+    except asyncio.CancelledError:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=300.0)
         except TimeoutError:
             process.kill()
             await process.wait()
@@ -357,12 +357,14 @@ async def async_main() -> None:
     parser.add_argument("--no-copy", action="store_true", help="Re-encode streams instead of copying")
     parser.add_argument("--no-verify", action="store_true", help="Skip output verification")
     parser.add_argument("--concurrency", type=int, default=4, help="Number of files to process at once (default: 4)")
-    args = parser.parse_args()
 
+    parser.parse_known_args()
     silent_dependencies_validation = "--help" in sys.argv or "-h" in sys.argv
     result = validate_dependencies(silent=silent_dependencies_validation)
     if not result:
         logger.warning("WARNING: dependency validation failed - you may experience issues")
+
+    args = parser.parse_args()
 
     input_path = Path(args.input_path).resolve()
     if not input_path.exists():
@@ -437,7 +439,7 @@ def main() -> None:
         exit_code = 2
     finally:
         # Cleanup any remaining resources
-        logger.info("Shutting down gracefully")
+        logger.debug("Shutting down gracefully")
     sys.exit(exit_code)
 
 
