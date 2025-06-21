@@ -9,7 +9,7 @@ from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
-from validate import validate_dependencies, validate_system_resources
+from validate import validate_dependencies
 
 
 class ProcessorError(Exception):
@@ -233,8 +233,6 @@ def main() -> None:
     if not validate_dependencies():
         logger.error("process stopped due to missing dependencies.")
         return
-
-    validate_system_resources()
 
     config = ProcessingConfig(
         audio_langs=args.audio_langs,

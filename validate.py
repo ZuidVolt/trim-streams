@@ -1,22 +1,20 @@
 """Module for validating dependencies and system resources."""
 
-# validate.py
 import logging
 import subprocess
+from importlib.metadata import PackageNotFoundError, version
 
-import pkg_resources
-import psutil
+
+class DependencyValidationError(Exception):
+    """Custom exception for dependency validation errors."""
+
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
 logger = logging.getLogger(__name__)
-
-# Constants
-MIN_REQUIRED_MEMORY = 4 * 1024 * 1024 * 1024  # 4 GB
 
 
 def log_warning(message: str) -> None:
@@ -35,51 +33,85 @@ def log_error_and_return_false(message: str) -> bool:
     return False
 
 
-def validate_dependencies() -> bool:
-    """Checks if the dependencies are installed correctly."""
-    required_dependencies = {
-        "psutil",
+def check_package_installed(package_name: str) -> bool:
+    """Check if a Python package is installed."""
+    try:
+        version(package_name)
+        return True
+    except PackageNotFoundError:
+        return False
+
+
+def validate_dependencies(silent: bool = False) -> bool:
+    """Check if the dependencies are installed correctly.
+
+    Args:
+        silent: If True, suppress informational log messages
+
+    Returns:
+        True if all dependencies are available, False otherwise
+    """
+    required_dependencies: set[str] = {
         "pydantic",
         "pydantic-core",
     }
 
-    # Check Python dependencies
+    # Check Python dependencies using importlib.metadata
     for dependency in required_dependencies:
-        try:
-            pkg_resources.get_distribution(dependency)
-        except pkg_resources.DistributionNotFound:
-            log_error_and_return_false(
-                (
-                    f"Missing required Python dependency: {dependency}. "
-                    f"Please install it using pip: pip install {dependency}"
-                ),
+        if not check_package_installed(dependency):
+            return log_error_and_return_false(
+                f"Missing required Python dependency: {dependency}. "
+                f"Please install it using pip: pip install {dependency}"
             )
 
     # Check if ffmpeg is available
     try:
-        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        logger.info("FFmpeg is available in the system's PATH.")
-    except FileNotFoundError:
-        log_error_and_return_false(
-            "Missing dependency: ffmpeg. Please install ffmpeg and make sure it's available in the system's PATH.",
+        subprocess.run(
+            ["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
         )
-    except Exception as e:
-        log_error_and_return_false(f"An unexpected error occurred while checking ffmpeg availability: {e}.")
+        if not silent:
+            logger.info("FFmpeg is available in the system's PATH.")
+    except FileNotFoundError:
+        return log_error_and_return_false(
+            "Missing dependency: ffmpeg. Please install ffmpeg and make sure it's available in the system's PATH."
+        )
+    except subprocess.TimeoutExpired:
+        return log_error_and_return_false("FFmpeg check timed out. Please verify ffmpeg installation.")
+    except subprocess.CalledProcessError as e:
+        return log_error_and_return_false(
+            f"FFmpeg returned non-zero exit code: {e.returncode}. Please verify ffmpeg installation."
+        )
+    except DependencyValidationError as e:
+        return log_error_and_return_false(f"An unexpected error occurred while checking ffmpeg availability: {e}.")
 
-    logger.info("All dependencies are installed and available.")
+    if not silent:
+        logger.info("All dependencies are installed and available.")
     return True
 
 
-def validate_system_resources() -> None:
-    """Validate system resources before encoding."""
+def get_package_version(package_name: str) -> str | None:
+    """Get the version of a Python package."""
     try:
-        available_memory = psutil.virtual_memory().available
-        min_required_memory_gb = MIN_REQUIRED_MEMORY / (1024**3)
-        if available_memory <= MIN_REQUIRED_MEMORY:
-            log_warning(
-                f"Low memory available. Recommended: {min_required_memory_gb:.2f} GB or more. Processing may be slow.",
-            )
-    except (FileNotFoundError, PermissionError) as e:
-        log_error(f"Directory error: {e}")
-    except Exception as e:
-        log_error(f"Unexpected error during resource validation: {e}")
+        return version(package_name)
+    except PackageNotFoundError:
+        return None
+
+
+def list_dependency_versions(dependencies: set[str]) -> dict[str, str | None]:
+    """List the versions of specified Python packages."""
+    return {dep: get_package_version(dep) for dep in dependencies}
+
+
+if __name__ == "__main__":
+    # Test the validation
+    print("Testing dependency validation...")
+    is_valid = validate_dependencies(silent=False)
+    print(f"Validation result: {'✓ PASS' if is_valid else '✗ FAIL'}")
+
+    # Show versions of detected dependencies
+    deps = {"pydantic", "pydantic-core"}
+    versions = list_dependency_versions(deps)
+    print("\nDetected package versions:")
+    for pkg, ver in versions.items():
+        status = f"v{ver}" if ver else "NOT FOUND"
+        print(f"  {pkg}: {status}")
