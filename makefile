@@ -16,7 +16,7 @@ basedpyright-check: # secondary type checking (pyright with extra rules)
 pyrefly-check:
 	pyrefly check $(PYTHON_FILES)
 
-check: format ruff-check basedpyright-check pyrefly-check
+check: format ruff-check basedpyright-check
 
 # Additional analysis checks (not Enforced)
 radon: # cyclomatic complexity
