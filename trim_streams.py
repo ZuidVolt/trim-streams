@@ -19,7 +19,7 @@ VIDEO_EXTENSIONS: Final[frozenset[str]] = frozenset({".mkv", ".mp4", ".avi", ".m
 STREAM_TYPES: Final[dict[str, str]] = {"VIDEO": "video", "AUDIO": "audio", "SUBTITLE": "subtitle"}
 
 
-# ===== SECTION: Type Definitions and Data Strfuctures =====
+# ===== SECTION: Type Definitions and Data Structures =====
 class ProcessorError(Exception):
     """Base error for video processing."""
 
